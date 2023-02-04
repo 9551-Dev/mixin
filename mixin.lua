@@ -196,7 +196,8 @@ local function tokenize(str)
     local can_expand = ""
 
     for i=1,#str do
-        local char = str:sub(i,i)
+        local char      = str:sub(i,i)
+        local next_char = str:sub(i+1,i+1)
 
         if char == "\'" or char == "\"" then
             if not escape_next then is_string = not is_string end
@@ -205,11 +206,9 @@ local function tokenize(str)
             escape_next = true
         end
 
-        if not is_string and char:match("%d") then
-            print("started number")
+        if not is_string and (char:match("%d") or (char == "." and next_char:match("%d"))) then
             is_number = true
         elseif char ~= "." then
-            print("ended number")
             is_number = false
         end
 
@@ -231,7 +230,7 @@ local function tokenize(str)
 
         if (((expansible_tokens[can_expand] == char) or (can_expand == "" and expansible_tokens[char])) and not is_string) and not is_number then
             can_expand = can_expand .. char
-            if not expansible_tokens[can_expand .. str:sub(i+1,i+1)] then
+            if not expansible_tokens[can_expand .. next_char] then
                 tokens[#tokens+1] = can_expand
                 can_expand = ""
             end
@@ -324,4 +323,4 @@ for k,v in ipairs(to_tokenize) do
     data[v] = tokenize(d)
 end
 
-return construct_code(remove_parents(process_tokens(data["nimg.lua"])))
+return remove_parents(process_tokens(data["nimg.lua"]))
