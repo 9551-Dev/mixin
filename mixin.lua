@@ -86,7 +86,7 @@ local function make_type(token)
         out = "lua_token"
     elseif token:match("^\".+\"$") then
         out = "string"
-    elseif token:match("%d") then
+    elseif token:match("(%d*%.?%d+)") then
         out = "number"
     else out = "variable" end
     
@@ -104,7 +104,7 @@ local function make_value(token)
         out = "lua_token"
     elseif token:match("^\".+\"$") then
         out = token:match("^\"(.+)\"$")
-    elseif token:match("%d") then
+    elseif token:match("(%d*%.?%d+)") then
         out = tonumber(token)
     else out = token end
     
@@ -190,6 +190,7 @@ local function tokenize(str)
     local token = ""
 
     local is_string   = false
+    local is_number   = false
     local escape_next = false
 
     local can_expand = ""
@@ -204,10 +205,18 @@ local function tokenize(str)
             escape_next = true
         end
 
+        if not is_string and char:match("%d") then
+            print("started number")
+            is_number = true
+        elseif char ~= "." then
+            print("ended number")
+            is_number = false
+        end
+
         if char:match("%s") and not is_string then
             if token ~= "" then tokens[#tokens+1] = token end
             token = ""
-        elseif token_lookup[char] and not is_string then
+        elseif token_lookup[char] and not is_string and not is_number then
             if token ~= "" then tokens[#tokens+1] = token end
             
             if not expansible_tokens[char] then
@@ -215,12 +224,12 @@ local function tokenize(str)
             end
 
             token = ""
-        elseif not expansible_tokens[char] or is_string then
+        elseif not expansible_tokens[char] or is_string or is_number then
             token = token .. char
             escape_next = false
         end
 
-        if ((expansible_tokens[can_expand] == char) or (can_expand == "" and expansible_tokens[char])) and not is_string then
+        if (((expansible_tokens[can_expand] == char) or (can_expand == "" and expansible_tokens[char])) and not is_string) and not is_number then
             can_expand = can_expand .. char
             if not expansible_tokens[can_expand .. str:sub(i+1,i+1)] then
                 tokens[#tokens+1] = can_expand
