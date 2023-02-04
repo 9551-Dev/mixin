@@ -60,7 +60,11 @@ local expansible_tokens = {
     [">="] ="=",
     ["."]  =".",
     [".."] =".",
-    ["..."]=""
+    ["..."]="",
+    ["["]  ="[",
+    ["[["] ="[",
+    ["]"]  ="]",
+    ["]]"] ="]"
 }
 
 local scope = {
@@ -68,7 +72,7 @@ local scope = {
         "if","elseif","while","for"
     },
     open = lookupify{
-        "do","else","then","function"
+        "do","else","then","function","repeat"
     },
     close = lookupify{
         "end","elseif","else","until"
@@ -323,4 +327,4 @@ for k,v in ipairs(to_tokenize) do
     data[v] = tokenize(d)
 end
 
-return remove_parents(process_tokens(data["nimg.lua"]))
+return construct_code(remove_parents(process_tokens(data["nimg.lua"])))
