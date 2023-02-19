@@ -47,6 +47,11 @@ local keyword_value_proccessor = {
         ["false"]=function() return false end,
         ["nil"]  =function() return nil   end
     },
+    function_definition={
+        ["function"]=function(tokens,current_token)
+            return {name=tokens[current_token+1]}
+        end
+    }
 }
 
 local expansible_tokens = {
@@ -92,17 +97,17 @@ local function make_type(token)
         out = "string"
     elseif token:match("(%d*%.?%d+)") then
         out = "number"
-    else out = "variable" end
+    else out = "unknown" end
     
     return out
 end
 
-local function make_value(token)
+local function make_value(token,token_buffer,token_index)
     local out
     if keyword_lookup[token] then
         local keyword_type = keyword_lookup[token]
         if keyword_type and keyword_value_proccessor[keyword_type] then
-            out = keyword_value_proccessor[keyword_type][token]()
+            out = keyword_value_proccessor[keyword_type][token](token_buffer,token_index)
         end
     elseif token_lookup[token] then
         out = "lua_token"
@@ -114,6 +119,23 @@ local function make_value(token)
     
     return out
 end
+
+local literals = lookupify{"string","number"}
+
+local keyword_proccessor = setmetatable({
+    ["("] = function() return {state_open =true} end,
+    [")"] = function() return {state_close=true} end
+},{__index=function(this,key)
+    return function()
+        local tp = make_type(key)
+
+        return {
+            meta  = {type = tp},
+            value = make_value(key),
+            type  = literals[tp] and "literal" or "name"
+        }
+    end
+end})
 
 local scope_token_processor = {
     ["if"] = function(out,buffer,token_index)
@@ -157,22 +179,22 @@ local scope_token_processor = {
 local TOKEN_MT = {__tostring=function(self) return "TOKEN: " .. self.type  end}
 local SCOPE_MT = {__tostring=function(self) return "SCOPE: " .. self.index end}
 
-local function parse_token(out,token)
+local function parse_token(out,token,token_buffer,token_index)
     out.object = "token"
     out.name   = token
     out.type   = make_type(token)
-    out.value  = make_value(token)
+    out.value  = make_value(token,token_buffer,token_index)
 
     setmetatable(out,TOKEN_MT)
 
     return out
 end
 
-local function parse_tokens(tokens)
+local function parse_tokens(tokens,token_buffer,token_index)
     local conditions = tokens.condition
     if conditions then
         for k,v in pairs(conditions) do
-            conditions[k] = parse_token({},v)
+            conditions[k] = parse_token({},v,token_buffer,token_index)
         end
     end
     return tokens
@@ -246,7 +268,45 @@ local function tokenize(str)
     return tokens
 end
 
-local function process_tokens(t)
+local function create_token_stream(tokens)
+    return setmetatable({data=tokens,cursor=1},{__index={
+        read=function(this)
+            local info = this.data[this.cursor]
+
+            this.cursor = this.cursor + 1
+
+            return info
+        end,
+        seek=function(this,seek_amount)
+            this.cursor = this.cursor + seek_amount
+        end
+    },__call=function(this) return this.cursor <= #this.data end})
+end
+
+local function generate_ast(token_stream)
+    local abstract_syntax_tree = {}
+
+    while token_stream() do
+        local token = token_stream:read()
+
+        local process = keyword_proccessor[token]()
+        
+        if process.state_close then
+            abstract_syntax_tree = abstract_syntax_tree.parent
+        end
+
+        abstract_syntax_tree[#abstract_syntax_tree+1] = process
+
+        if process.state_open then
+            process.parent = abstract_syntax_tree
+            abstract_syntax_tree      = process
+        end
+    end
+
+    return abstract_syntax_tree
+end
+
+local function process_tokens(tokens)
     local current_scope = {}
 
     local token_buffer = {}
@@ -268,7 +328,7 @@ local function process_tokens(t)
             current_scope = current_scope.parent
         end
 
-        current_scope[#current_scope+1] = parse_token({},current_token)
+        current_scope[#current_scope+1] = parse_token({},current_token,t,i)
         
         if scope.open[current_token] then
 
@@ -300,6 +360,37 @@ local function process_tokens(t)
     return current_scope
 end
 
+local function analyze_proccesed_tokens(tree)
+    local data = {}
+
+    local scopes = {}
+
+    local function gather_scope_data(scope)
+        scopes[scope.index or 0] = scope
+        for k,v in ipairs(scope) do
+            if v.object == "scope" then
+                gather_scope_data(v)
+            end
+        end
+    end
+
+    gather_scope_data(tree)
+
+    local function gather_functions(scope)
+        for k,v in ipairs(scope) do
+            if v.object == "scope" then
+                gather_functions(v)
+            elseif v.object == "token" then
+                --if 
+            end
+        end
+    end
+
+    data.scopes = scopes
+
+    return tree
+end
+
 local function construct_code(t)
     local code = ""
 
@@ -314,17 +405,64 @@ local function construct_code(t)
     return code
 end
 
+local function make_methods(child)
+    return setmetatable({
+        __build=function(obj)
+            child = obj
+            return obj
+        end,
+        type = function() return child.obj_type end,
+    },{__tostring=function() return "object" end})
+end
+
+local object  = {new=function(child)
+    return setmetatable(child,{__index=make_methods(child)})
+end}
+
+local mixin_object = {
+    __index=object.new{
+    register_file=function()
+    end
+    },__tostring=function() return "mixin" end
+}
+
+local function create_mixin(storage,data)
+
+    local tokens = tokenize      (data)
+    local tree   = process_tokens(tokens)
+
+    storage.source = data
+    storage.tokens = tokens
+    storage.tree   = tree
+
+    return setmetatable(storage,mixin_object)
+end
+
+local mixin_system_object = {
+    __index=object.new{
+    register_file=function(data)
+    end,
+    quick_read=function(path)
+        local file = fs.open(path,"r")
+        if not file then error("Coulnt read file: "..path) end
+        local data = file.readAll()
+        file.close()
+
+        return data
+    end
+    },__tostring=function() return "libmixin" end
+}
+
 function mixin.create_system()
+    local data = {
+        mixins = {}
+    }
+
+    return setmetatable(data,mixin_system_object):__build()
 end
 
-local to_tokenize = {"nimg.lua"}
-local data = {}
+local f = fs.open("mixin_tester.lua","r")
+local d = f.readAll()
+f.close()
 
-for k,v in ipairs(to_tokenize) do
-    local f = fs.open(v,"r")
-    local d = f.readAll()
-    f.close()
-    data[v] = tokenize(d)
-end
-
-return construct_code(remove_parents(process_tokens(data["nimg.lua"])))
+return generate_ast(create_token_stream(tokenize(d)))
